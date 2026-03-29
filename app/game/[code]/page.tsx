@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/components/lib/supabase'
+import { supabase } from '@/app/components/lib/supabase'
 
 interface GameState {
   id: string
