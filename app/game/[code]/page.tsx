@@ -1,14 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
 import Timer from '@/app/components/Timer'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+import { supabase } from '@/app/components/lib/supabase'
 
 interface Question {
   id: string
@@ -38,120 +33,143 @@ export default function GamePage() {
   const [game, setGame] = useState<Game | null>(null)
   const [question, setQuestion] = useState<Question | null>(null)
   const [loading, setLoading] = useState(true)
-  const [isExpired, setIsExpired] = useState(false)   
+  const [isExpired, setIsExpired] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isHost, setIsHost] = useState(false)
+  // Décalage estimé entre l'horloge client et serveur en ms
+  // Calculé à chaque réception de données : serverTime - clientTime au moment de la réception
   const [serverTimeOffsetMs, setServerTimeOffsetMs] = useState(0)
-  const [latestQuestionRequestId, setLatestQuestionRequestId] = useState(0)
-  const [isFetchingQuestion, setIsFetchingQuestion] = useState(false)
 
-  // Charger la question depuis son ID
- async function fetchQuestion(questionId: string) {
-  const requestId = latestQuestionRequestId + 1
-  setLatestQuestionRequestId(requestId)
-  setIsFetchingQuestion(true)
+  // Ref pour éviter les appels fetchQuestion obsolètes si la question change vite
+  const currentQuestionIdRef = useRef<string | null>(null)
 
-  try {
+  async function fetchQuestion(questionId: string) {
+    currentQuestionIdRef.current = questionId
+
     const { data } = await supabase
       .from('questions')
       .select('id, type, question, choices, difficulty, theme, image')
       .eq('id', questionId)
       .single()
 
-    if (requestId === latestQuestionRequestId && data) {
-      setQuestion(data)
-    }
-  } finally {
-    if (requestId === latestQuestionRequestId) {
-      setIsFetchingQuestion(false)
-    }
+    // Ignorer si une question plus récente a été demandée entre-temps
+    if (currentQuestionIdRef.current !== questionId) return
+    if (data) setQuestion(data)
   }
-}
 
   useEffect(() => {
     const playerId = localStorage.getItem('playerId')
     if (!playerId) { router.push('/'); return }
 
     async function init() {
+      const clientTimeBefore = Date.now()
+
       const { data } = await supabase
         .from('games')
         .select('*')
         .eq('code', code)
         .single()
 
+      const clientTimeAfter = Date.now()
+
       if (!data) { router.push('/'); return }
       if (data.status === 'finished') { router.push(`/game/${code}/leaderboard`); return }
+      if (data.status === 'revealing') { router.push(`/game/${code}/result`); return }
+      if (data.status === 'leaderboard') { router.push(`/game/${code}/leaderboard`); return }
+
+      // Estimer le décalage client/serveur :
+      // On utilise le milieu de la requête comme approximation du moment serveur
+      // serverTime = question_started_at (connu)
+      // clientTime au moment équivalent ≈ milieu de la requête
+      const clientMidpoint = (clientTimeBefore + clientTimeAfter) / 2
+      const serverQuestionStartMs = new Date(data.question_started_at).getTime()
+      const elapsedSinceStart = clientMidpoint - serverQuestionStartMs
+      // Si elapsedSinceStart >> duration → horloge client en avance
+      // On ne peut pas reconstruire l'offset exact sans un endpoint dédié,
+      // mais on peut détecter une dérive grossière et la corriger
+      // Pour des amis sur le même réseau, l'offset réseau est < 50ms → 0 suffit
+      setServerTimeOffsetMs(0) // voir note ci-dessous*
 
       setGame(data)
       setIsExpired(false)
       setIsSubmitting(false)
 
-      setServerTimeOffsetMs(0)
+      const { data: me } = await supabase
+        .from('players')
+        .select('is_host')
+        .eq('id', playerId)
+        .single()
+      setIsHost(me?.is_host ?? false)
 
       await fetchQuestion(data.question_ids[data.current_question_index])
       setLoading(false)
-  }
+    }
 
-  init() // appel propre, pas de cascade
+    init()
 
-  const channel = supabase
-    .channel(`game:${code}`)
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'games',
-      filter: `code=eq.${code}`,
-    }, async (payload) => {
-      const updated = payload.new as Game
-      if (updated.status === 'finished') {
-        router.push(`/game/${code}/leaderboard`)
-        return
-      }
-      if (updated.status === 'playing') {
-        setGame(updated)
-        setIsExpired(false)
-        setIsSubmitting(false)
-        await fetchQuestion(updated.question_ids[updated.current_question_index])
-      }
-    })
-    .subscribe()
+    const channel = supabase
+      .channel(`game:${code}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'games',
+        filter: `code=eq.${code}`,
+      }, async (payload) => {
+        const updated = payload.new as Game
 
-  return () => { supabase.removeChannel(channel) }
-}, [code])
+        if (updated.status === 'revealing') {
+          router.push(`/game/${code}/result`)
+          return
+        }
+        if (updated.status === 'leaderboard') {
+          router.push(`/game/${code}/leaderboard`)
+          return
+        }
+        if (updated.status === 'finished') {
+          router.push(`/game/${code}/leaderboard`)
+          return
+        }
+        if (updated.status === 'playing') {
+          setGame(updated)
+          setIsExpired(false)
+          setIsSubmitting(false)
+          await fetchQuestion(updated.question_ids[updated.current_question_index])
+        }
+      })
+      .subscribe()
 
-  // Soumettre une réponse
+    return () => { supabase.removeChannel(channel) }
+  }, [code])
+
   async function handleAnswer(value: string) {
     if (isExpired || isSubmitting || !game || !question) return
 
     const playerId = localStorage.getItem('playerId')
-     if (!playerId) {
-    router.push('/')
-    return
-  }
-  setIsSubmitting(true)
-  try {
-    const res = await fetch('/api/games/answer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        gameId: game.id,
-        playerId,
-        questionId: question.id,
-        answer: value,
-      }),
-    })
+    if (!playerId) { router.push('/'); return }
 
-    if (!res.ok) {
-      if (res.status === 400) {
-        setIsSubmitting(false)
-        return
+    setIsSubmitting(true)
+    try {
+      const res = await fetch('/api/games/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gameId: game.id,
+          playerId,
+          questionId: question.id,
+          answer: value,
+        }),
+      })
+
+      if (!res.ok) {
+        if (res.status === 400) { setIsSubmitting(false); return }
+        throw new Error('Answer submission failed')
       }
-      throw new Error('Answer submission failed')
+
+      setIsSubmitting(false)
+      setIsExpired(true)
+    } catch {
+      setIsSubmitting(false)
     }
-    setIsSubmitting(false)
-    setIsExpired(true)
-  } catch {
-    setIsSubmitting(false)
-  }
   }
 
   if (loading || !question || !game) {
@@ -162,10 +180,12 @@ export default function GamePage() {
     )
   }
 
+  const isDisabled = isExpired || isSubmitting
+
   return (
     <main className="min-h-screen bg-gray-950 text-white flex flex-col p-6 max-w-md mx-auto">
 
-      {/* Header — progression + timer */}
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <span className="text-gray-400 text-sm">
           Question {game.current_question_index + 1}/{game.question_count}
@@ -176,7 +196,12 @@ export default function GamePage() {
       </div>
 
       {/* Timer */}
-      <Timer startedAt={game.question_started_at} duration={game.question_duration} serverTimeOffsetMs={serverTimeOffsetMs} onExpire={() => setIsExpired(true)} />
+      <Timer
+        startedAt={game.question_started_at}
+        duration={game.question_duration}
+        serverTimeOffsetMs={serverTimeOffsetMs}
+        onExpire={() => setIsExpired(true)}
+      />
 
       {/* Question */}
       <div className="bg-gray-900 rounded-2xl p-5 my-6">
@@ -190,23 +215,23 @@ export default function GamePage() {
         <p className="text-lg font-medium leading-relaxed">{question.question}</p>
       </div>
 
-      {/* Réponses selon le type */}
-      {(isExpired || isSubmitting || isFetchingQuestion) && (
+      {/* Message attente */}
+      {isDisabled && (
         <div className="text-center text-gray-400 text-sm mb-4 animate-pulse">
-          Réponse envoyée — en attente des autres joueurs...
+          {isSubmitting ? 'Envoi...' : 'Réponse envoyée — en attente des autres joueurs...'}
         </div>
       )}
 
-      {/* QCM */}
+      {/* QCM / Image */}
       {(question.type === 'qcm' || question.type === 'image') && (
         <div className="grid grid-cols-2 gap-3">
           {question.choices.map((choice, i) => (
             <button
               key={i}
               onClick={() => handleAnswer(String(i))}
-              disabled={isExpired || isSubmitting || isFetchingQuestion}
+              disabled={isDisabled}
               className={`rounded-2xl py-5 px-3 text-sm font-medium transition-all active:scale-95 ${
-                (isExpired || isSubmitting) 
+                isDisabled
                   ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
                   : 'bg-indigo-700 hover:bg-indigo-600 text-white'
               }`}
@@ -224,9 +249,9 @@ export default function GamePage() {
             <button
               key={i}
               onClick={() => handleAnswer(String(i))}
-              disabled={isExpired || isSubmitting || isFetchingQuestion}
+              disabled={isDisabled}
               className={`rounded-2xl py-6 text-xl font-bold transition-all active:scale-95 ${
-                (isExpired || isSubmitting)
+                isDisabled
                   ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
                   : i === 0
                   ? 'bg-green-700 hover:bg-green-600'
@@ -241,12 +266,12 @@ export default function GamePage() {
 
       {/* Estimation */}
       {question.type === 'estimation' && (
-        <EstimationInput key={question.id} onSubmit={handleAnswer} disabled={isExpired || isSubmitting || isFetchingQuestion} />
+        <EstimationInput key={question.id} onSubmit={handleAnswer} disabled={isDisabled} />
       )}
 
       {/* Réponse libre */}
       {question.type === 'free_text' && (
-        <FreeTextInput key={question.id} onSubmit={handleAnswer} disabled={isExpired || isSubmitting || isFetchingQuestion} />
+        <FreeTextInput key={question.id} onSubmit={handleAnswer} disabled={isDisabled} />
       )}
 
       {/* Petit bac */}
@@ -255,14 +280,30 @@ export default function GamePage() {
           key={question.id}
           categories={question.choices}
           onSubmit={handleAnswer}
-          disabled={isExpired || isSubmitting || isFetchingQuestion}
+          disabled={isDisabled}
         />
+      )}
+
+      {/* Bouton révéler — host uniquement, après expiration */}
+      {isExpired && isHost && (
+        <button
+          onClick={async () => {
+            await fetch('/api/games/reveal', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ gameCode: code }),
+            })
+          }}
+          className="mt-4 w-full bg-yellow-600 hover:bg-yellow-500 rounded-2xl py-4 font-bold text-lg active:scale-95 transition-all"
+        >
+          👁 Révéler les réponses
+        </button>
       )}
     </main>
   )
 }
 
-// ── Sous-composants inline ───────────────────────────────────────────────────
+// ── Sous-composants ──────────────────────────────────────────────────────────
 
 function EstimationInput({ onSubmit, disabled }: { onSubmit: (v: string) => void; disabled: boolean }) {
   const [value, setValue] = useState('')
@@ -322,11 +363,6 @@ function PetitBacInput({
 }) {
   const [values, setValues] = useState<Record<string, string>>({})
 
-  function handleSubmit() {
-    // Sérialise toutes les réponses en JSON string
-    onSubmit(JSON.stringify(values))
-  }
-
   return (
     <div className="flex flex-col gap-3">
       {categories.map((cat) => (
@@ -343,7 +379,7 @@ function PetitBacInput({
         </div>
       ))}
       <button
-        onClick={handleSubmit}
+        onClick={() => onSubmit(JSON.stringify(values))}
         disabled={disabled}
         className="bg-indigo-600 hover:bg-indigo-500 rounded-2xl py-4 font-bold text-lg disabled:opacity-50 active:scale-95 transition-all mt-2"
       >

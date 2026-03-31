@@ -6,7 +6,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 const questions = [
 
-  // ── QCM (5) ──────────────────────────────────────────────────────────────
+  //  QCM (5) 
 
   {
     type: 'qcm',
@@ -54,7 +54,7 @@ const questions = [
     image: null,
   },
 
-  // ── VRAI / FAUX (5) ──────────────────────────────────────────────────────
+  //  VRAI / FAUX (5) 
 
   {
     type: 'true_false',
@@ -102,7 +102,7 @@ const questions = [
     image: null,
   },
 
-  // ── ESTIMATION (5) ───────────────────────────────────────────────────────
+  //  ESTIMATION (5) 
   // answer = valeur numérique exacte (tolérance ±10% dans la game logic)
 
   {
@@ -151,7 +151,7 @@ const questions = [
     image: null,
   },
 
-  // ── RÉPONSE LIBRE (5) ────────────────────────────────────────────────────
+  //  RÉPONSE LIBRE (5) 
   // answer = chaîne normalisée (lowercase, sans accents dans la game logic)
 
   {
