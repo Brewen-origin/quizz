@@ -15,7 +15,6 @@ interface Question {
   type: string
   question: string
   choices: string[]
-  answer: string
   difficulty: number
   theme: string
   image: string | null
@@ -40,12 +39,13 @@ export default function GamePage() {
   const [question, setQuestion] = useState<Question | null>(null)
   const [answered, setAnswered] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [serverTimeOffsetMs, setServerTimeOffsetMs] = useState(0)
 
   // Charger la question depuis son ID
   async function fetchQuestion(questionId: string) {
     const { data } = await supabase
       .from('questions')
-      .select('*')
+      .select('id, type, question, choices, difficulty, theme, image')
       .eq('id', questionId)
       .single()
     if (data) setQuestion(data)
@@ -68,34 +68,33 @@ export default function GamePage() {
     await fetchQuestion(data.question_ids[data.current_question_index])
     setLoading(false)
   }
-useEffect(() => {
-  const playerId = localStorage.getItem('playerId')
-  if (!playerId) { router.push('/'); return }
 
-  async function init() {
-    const { data } = await supabase
-      .from('games')
-      .select('*')
-      .eq('code', code)
-      .single()
+  useEffect(() => {
+    const playerId = localStorage.getItem('playerId')
+    if (!playerId) { router.push('/'); return }
 
-    if (!data) { router.push('/'); return }
-    if (data.status === 'finished') { router.push(`/game/${code}/leaderboard`); return }
+    async function init() {
+      const { data } = await supabase
+        .from('games')
+        .select('*')
+        .eq('code', code)
+        .single()
 
-    setGame(data)
-    setAnswered(false)
+      if (!data) { router.push('/'); return }
+      if (data.status === 'finished') { router.push(`/game/${code}/leaderboard`); return }
 
-    const { data: q } = await supabase
-      .from('questions')
-      .select('*')
-      .eq('id', data.question_ids[data.current_question_index])
-      .single()
+      setGame(data)
+      setAnswered(false)
 
-    if (q) setQuestion(q)
-    setLoading(false)
+      const serverStartedAtMs = new Date(data.question_started_at).getTime()
+      const clientNow = Date.now()
+      setServerTimeOffsetMs(serverStartedAtMs - clientNow)
+
+      await fetchQuestion(data.question_ids[data.current_question_index])
+      setLoading(false)
   }
 
-  init() // ← appel propre, pas de cascade
+  init() // appel propre, pas de cascade
 
   const channel = supabase
     .channel(`game:${code}`)
@@ -113,12 +112,7 @@ useEffect(() => {
       if (updated.status === 'playing') {
         setGame(updated)
         setAnswered(false)
-        const { data: q } = await supabase
-          .from('questions')
-          .select('*')
-          .eq('id', updated.question_ids[updated.current_question_index])
-          .single()
-        if (q) setQuestion(q)
+        await fetchQuestion(updated.question_ids[updated.current_question_index])
       }
     })
     .subscribe()
@@ -129,19 +123,32 @@ useEffect(() => {
   // Soumettre une réponse
   async function handleAnswer(value: string) {
     if (answered || !game || !question) return
-    setAnswered(true)
 
     const playerId = localStorage.getItem('playerId')
-    await fetch('/api/games/answer', {
+     if (!playerId) {
+    router.push('/')
+    return
+  }
+
+  setAnswered(true)
+  try {
+    const res = await fetch('/api/games/answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        gameCode: code,
+        gameId: game.id,
         playerId,
         questionId: question.id,
-        answerValue: value,
+        answer: value,
       }),
     })
+
+    if (!res.ok) {
+      throw new Error('Answer submission failed')
+    }
+  } catch {
+    setAnswered(false)
+  }
   }
 
   if (loading || !question || !game) {
@@ -166,7 +173,7 @@ useEffect(() => {
       </div>
 
       {/* Timer */}
-      <Timer startedAt={game.question_started_at} duration={game.question_duration} onExpire={() => setAnswered(true)} />
+      <Timer startedAt={game.question_started_at} duration={game.question_duration} serverTimeOffsetMs={serverTimeOffsetMs} onExpire={() => setAnswered(true)} />
 
       {/* Question */}
       <div className="bg-gray-900 rounded-2xl p-5 my-6">
@@ -231,17 +238,18 @@ useEffect(() => {
 
       {/* Estimation */}
       {question.type === 'estimation' && (
-        <EstimationInput onSubmit={handleAnswer} disabled={answered} />
+        <EstimationInput key={question.id} onSubmit={handleAnswer} disabled={answered} />
       )}
 
       {/* Réponse libre */}
       {question.type === 'free_text' && (
-        <FreeTextInput onSubmit={handleAnswer} disabled={answered} />
+        <FreeTextInput key={question.id} onSubmit={handleAnswer} disabled={answered} />
       )}
 
       {/* Petit bac */}
       {question.type === 'petit_bac' && (
         <PetitBacInput
+          key={question.id}
           categories={question.choices}
           onSubmit={handleAnswer}
           disabled={answered}

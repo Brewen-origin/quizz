@@ -6,9 +6,10 @@ interface TimerProps {
   startedAt: string      // ISO string depuis games.question_started_at
   duration?: number      // secondes, défaut 15
   onExpire?: () => void  // callback quand timer = 0
+  serverTimeOffsetMs: number // gestion pour date générale et pas locale au téléphone
 }
 
-export default function Timer({ startedAt, duration = 15, onExpire }: TimerProps) {
+export default function Timer({ startedAt, duration = 15, serverTimeOffsetMs,onExpire }: TimerProps) {
   const [timeLeft, setTimeLeft] = useState(duration)
   const expiredRef = useRef(false)  // évite d'appeler onExpire plusieurs fois
 
@@ -16,7 +17,8 @@ export default function Timer({ startedAt, duration = 15, onExpire }: TimerProps
     expiredRef.current = false
 
     function tick() {
-      const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000
+      const now = Date.now() + serverTimeOffsetMs
+      const elapsed = (now - new Date(startedAt).getTime()) / 1000
       const remaining = Math.max(0, duration - elapsed)
       setTimeLeft(remaining)
 
@@ -30,7 +32,7 @@ export default function Timer({ startedAt, duration = 15, onExpire }: TimerProps
     const interval = setInterval(tick, 100) // update toutes les 100ms pour fluidité
 
     return () => clearInterval(interval)
-  }, [startedAt, duration]) // se recalcule si nouvelle question
+  }, [startedAt, duration, serverTimeOffsetMs]) // se recalcule si nouvelle question
 
   const percentage = (timeLeft / duration) * 100
 

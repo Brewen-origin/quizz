@@ -19,10 +19,20 @@ function shuffle<T>(array: T[]): T[] {
 export async function POST(request: Request) {
   try {
     const { gameCode, themes, questionCount, questionDuration } = await request.json()
-
+    const parsedQuestionDuration = questionDuration == null ? 15 : Number(questionDuration)
     if (!gameCode || !questionCount) {
       return NextResponse.json({ error: 'Paramètres manquants' }, { status: 400 })
     }
+     if (
+      !Number.isInteger(parsedQuestionDuration) ||
+      parsedQuestionDuration < 10 ||
+      parsedQuestionDuration > 30 ||
+      parsedQuestionDuration % 5 !== 0
+    ) {
+      return NextResponse.json({ error: 'Durée invalide' }, { status: 400 })
+    }
+
+    
 
     // Vérifier que la partie existe et est en lobby
     const { data: game, error: gameError } = await supabase
@@ -63,7 +73,7 @@ export async function POST(request: Request) {
         status: 'playing',
         question_ids: selectedIds,
         question_count: questionCount,
-        question_duration: questionDuration ?? 15,
+        question_duration: parsedQuestionDuration,
         themes: themes ?? [],
         current_question_index: 0,
         question_started_at: new Date().toISOString(),
