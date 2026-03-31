@@ -33,6 +33,8 @@ export default function HomePage() {
       return
     }
 
+    localStorage.removeItem('playerId')
+    localStorage.removeItem('gameCode')
     // Sauvegarde localStorage
     localStorage.setItem('pseudo', pseudo.trim())
     localStorage.setItem('playerId', '') // temporaire, rempli après create/join
