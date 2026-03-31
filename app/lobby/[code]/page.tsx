@@ -2,15 +2,10 @@
 
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/app/components/lib/supabase'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
 
 const THEMES = ['culture', 'sport', 'histoire', 'science']
-// Ajoute ici les thèmes que tu as dans ta DB
 
 interface Player {
   id: string
