@@ -18,7 +18,7 @@ function shuffle<T>(array: T[]): T[] {
 
 export async function POST(request: Request) {
   try {
-    const { gameCode, themes, questionCount } = await request.json()
+    const { gameCode, themes, questionCount, questionDuration } = await request.json()
 
     if (!gameCode || !questionCount) {
       return NextResponse.json({ error: 'Paramètres manquants' }, { status: 400 })
@@ -63,6 +63,7 @@ export async function POST(request: Request) {
         status: 'playing',
         question_ids: selectedIds,
         question_count: questionCount,
+        question_duration: questionDuration ?? 15,
         themes: themes ?? [],
         current_question_index: 0,
         question_started_at: new Date().toISOString(),

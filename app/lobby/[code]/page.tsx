@@ -28,6 +28,7 @@ export default function LobbyPage({ params }: { params: Promise<{ code: string }
   const [questionCount, setQuestionCount] = useState(10)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [questionDuration, setQuestionDuration] = useState(15)
 
   useEffect(() => {
     const playerId = localStorage.getItem('playerId')
@@ -120,8 +121,9 @@ export default function LobbyPage({ params }: { params: Promise<{ code: string }
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           gameCode: code,
-          themes: selectedThemes,     // [] = toutes les thèmes
+          themes: selectedThemes,     
           questionCount,
+          questionDuration,
         }),
       })
       const data = await res.json()
@@ -209,7 +211,23 @@ export default function LobbyPage({ params }: { params: Promise<{ code: string }
               <span>5</span><span>10</span><span>15</span><span>20</span>
             </div>
           </div>
-
+          <div className="bg-gray-900 rounded-2xl p-4">
+          <h2 className="text-gray-400 text-sm mb-3">
+            Temps par question : <span className="text-white font-bold">{questionDuration}s</span>
+          </h2>
+          <input
+            type="range"
+            min={10}
+            max={30}
+            step={5}
+            value={questionDuration}
+            onChange={(e) => setQuestionDuration(Number(e.target.value))}
+            className="w-full accent-indigo-500"
+          />
+          <div className="flex justify-between text-xs text-gray-500 mt-1">
+            <span>10s</span><span>15s</span><span>20s</span><span>25s</span><span>30s</span>
+          </div>
+        </div>
           {error && (
             <div className="bg-red-900/50 text-red-300 rounded-xl px-4 py-3 text-center text-sm">
               {error}
