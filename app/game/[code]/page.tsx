@@ -37,19 +37,35 @@ export default function GamePage() {
 
   const [game, setGame] = useState<Game | null>(null)
   const [question, setQuestion] = useState<Question | null>(null)
-  const [answered, setAnswered] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [isExpired, setIsExpired] = useState(false)   
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [serverTimeOffsetMs, setServerTimeOffsetMs] = useState(0)
+  const [latestQuestionRequestId, setLatestQuestionRequestId] = useState(0)
+  const [isFetchingQuestion, setIsFetchingQuestion] = useState(false)
 
   // Charger la question depuis son ID
-  async function fetchQuestion(questionId: string) {
+ async function fetchQuestion(questionId: string) {
+  const requestId = latestQuestionRequestId + 1
+  setLatestQuestionRequestId(requestId)
+  setIsFetchingQuestion(true)
+
+  try {
     const { data } = await supabase
       .from('questions')
       .select('id, type, question, choices, difficulty, theme, image')
       .eq('id', questionId)
       .single()
-    if (data) setQuestion(data)
+
+    if (requestId === latestQuestionRequestId && data) {
+      setQuestion(data)
+    }
+  } finally {
+    if (requestId === latestQuestionRequestId) {
+      setIsFetchingQuestion(false)
+    }
   }
+}
 
   // Charger la partie + question initiale
   async function fetchGame() {
@@ -64,7 +80,8 @@ export default function GamePage() {
     if (data.status === 'finished') { router.push(`/game/${code}/leaderboard`); return }
 
     setGame(data)
-    setAnswered(false)
+    setIsExpired(false)
+    setIsSubmitting(false)
     await fetchQuestion(data.question_ids[data.current_question_index])
     setLoading(false)
   }
@@ -84,11 +101,10 @@ export default function GamePage() {
       if (data.status === 'finished') { router.push(`/game/${code}/leaderboard`); return }
 
       setGame(data)
-      setAnswered(false)
+      setIsExpired(false)
+      setIsSubmitting(false)
 
-      const serverStartedAtMs = new Date(data.question_started_at).getTime()
-      const clientNow = Date.now()
-      setServerTimeOffsetMs(serverStartedAtMs - clientNow)
+      setServerTimeOffsetMs(0)
 
       await fetchQuestion(data.question_ids[data.current_question_index])
       setLoading(false)
@@ -111,7 +127,8 @@ export default function GamePage() {
       }
       if (updated.status === 'playing') {
         setGame(updated)
-        setAnswered(false)
+        setIsExpired(false)
+        setIsSubmitting(false)
         await fetchQuestion(updated.question_ids[updated.current_question_index])
       }
     })
@@ -122,15 +139,14 @@ export default function GamePage() {
 
   // Soumettre une réponse
   async function handleAnswer(value: string) {
-    if (answered || !game || !question) return
+    if (isExpired || isSubmitting || !game || !question) return
 
     const playerId = localStorage.getItem('playerId')
      if (!playerId) {
     router.push('/')
     return
   }
-
-  setAnswered(true)
+  setIsSubmitting(true)
   try {
     const res = await fetch('/api/games/answer', {
       method: 'POST',
@@ -144,10 +160,16 @@ export default function GamePage() {
     })
 
     if (!res.ok) {
+      if (res.status === 400) {
+        setIsSubmitting(false)
+        return
+      }
       throw new Error('Answer submission failed')
     }
+    setIsSubmitting(false)
+    setIsExpired(true)
   } catch {
-    setAnswered(false)
+    setIsSubmitting(false)
   }
   }
 
@@ -173,7 +195,7 @@ export default function GamePage() {
       </div>
 
       {/* Timer */}
-      <Timer startedAt={game.question_started_at} duration={game.question_duration} serverTimeOffsetMs={serverTimeOffsetMs} onExpire={() => setAnswered(true)} />
+      <Timer startedAt={game.question_started_at} duration={game.question_duration} serverTimeOffsetMs={serverTimeOffsetMs} onExpire={() => setIsExpired(true)} />
 
       {/* Question */}
       <div className="bg-gray-900 rounded-2xl p-5 my-6">
@@ -188,7 +210,7 @@ export default function GamePage() {
       </div>
 
       {/* Réponses selon le type */}
-      {answered && (
+      {(isExpired || isSubmitting || isFetchingQuestion) && (
         <div className="text-center text-gray-400 text-sm mb-4 animate-pulse">
           Réponse envoyée — en attente des autres joueurs...
         </div>
@@ -201,9 +223,9 @@ export default function GamePage() {
             <button
               key={i}
               onClick={() => handleAnswer(String(i))}
-              disabled={answered}
+              disabled={isExpired || isSubmitting || isFetchingQuestion}
               className={`rounded-2xl py-5 px-3 text-sm font-medium transition-all active:scale-95 ${
-                answered
+                (isExpired || isSubmitting) 
                   ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
                   : 'bg-indigo-700 hover:bg-indigo-600 text-white'
               }`}
@@ -221,9 +243,9 @@ export default function GamePage() {
             <button
               key={i}
               onClick={() => handleAnswer(String(i))}
-              disabled={answered}
+              disabled={isExpired || isSubmitting || isFetchingQuestion}
               className={`rounded-2xl py-6 text-xl font-bold transition-all active:scale-95 ${
-                answered
+                (isExpired || isSubmitting)
                   ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
                   : i === 0
                   ? 'bg-green-700 hover:bg-green-600'
@@ -238,12 +260,12 @@ export default function GamePage() {
 
       {/* Estimation */}
       {question.type === 'estimation' && (
-        <EstimationInput key={question.id} onSubmit={handleAnswer} disabled={answered} />
+        <EstimationInput key={question.id} onSubmit={handleAnswer} disabled={isExpired || isSubmitting || isFetchingQuestion} />
       )}
 
       {/* Réponse libre */}
       {question.type === 'free_text' && (
-        <FreeTextInput key={question.id} onSubmit={handleAnswer} disabled={answered} />
+        <FreeTextInput key={question.id} onSubmit={handleAnswer} disabled={isExpired || isSubmitting || isFetchingQuestion} />
       )}
 
       {/* Petit bac */}
@@ -252,7 +274,7 @@ export default function GamePage() {
           key={question.id}
           categories={question.choices}
           onSubmit={handleAnswer}
-          disabled={answered}
+          disabled={isExpired || isSubmitting || isFetchingQuestion}
         />
       )}
     </main>
