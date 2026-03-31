@@ -67,25 +67,6 @@ export default function GamePage() {
   }
 }
 
-  // Charger la partie + question initiale
-  async function fetchGame() {
-    const { data } = await supabase
-      .from('games')
-      .select('*')
-      .eq('code', code)
-      .single()
-
-    if (!data) { router.push('/'); return }
-
-    if (data.status === 'finished') { router.push(`/game/${code}/leaderboard`); return }
-
-    setGame(data)
-    setIsExpired(false)
-    setIsSubmitting(false)
-    await fetchQuestion(data.question_ids[data.current_question_index])
-    setLoading(false)
-  }
-
   useEffect(() => {
     const playerId = localStorage.getItem('playerId')
     if (!playerId) { router.push('/'); return }
