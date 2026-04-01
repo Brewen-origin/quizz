@@ -10,18 +10,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
     }
 
-    // Vérifier si déjà répondu
-    const { data: existing } = await supabase
-      .from('answers')
-      .select('id')
-      .eq('player_id', playerId)
-      .eq('question_id', questionId)
-      .maybeSingle()
-
-    if (existing) {
-      return NextResponse.json({ error: 'Already answered' }, { status: 400 })
-    }
-
     // Récupérer la question
     const { data: question, error: questionError } = await supabase
       .from('questions')
@@ -35,54 +23,51 @@ export async function POST(req: Request) {
 
     // Calcul résultat
     let isCorrect = false
+
     if (question.type === 'estimation') {
       const correctValue = Number(question.answer)
       const userValue = Number(answer)
+
       if (!isNaN(userValue)) {
         const tolerance = correctValue * 0.1
-        isCorrect = userValue >= correctValue - tolerance && userValue <= correctValue + tolerance
+        isCorrect =
+          userValue >= correctValue - tolerance &&
+          userValue <= correctValue + tolerance
       }
     } else {
-      isCorrect = String(answer).trim().toLowerCase() === String(question.answer).trim().toLowerCase()
+      isCorrect =
+        String(answer).trim().toLowerCase() ===
+        String(question.answer).trim().toLowerCase()
     }
 
     // Points
     const points = isCorrect ? question.difficulty * 100 : 0
-
-    // Insérer la réponse
-    const { error: insertError } = await supabase
-      .from('answers')
-      .insert({
-        game_id: gameId,
-        player_id: playerId,
-        question_id: questionId,
-        answer_value: String(answer),
-        is_correct: isCorrect,
-        points,
-        answered_at: new Date().toISOString(),
-      })
-
-    if (insertError) {
-      if (insertError.code === '23505') {
-        return NextResponse.json({ error: 'Already answered (race)' }, { status: 400 })
+    // Appel RPC dans supabase
+    const { error: rpcError } = await supabase.rpc(
+      'record_answer_and_increment_score',
+      {
+        p_game_id: gameId,
+        p_player_id: playerId,
+        p_question_id: questionId,
+        p_answer_value: String(answer),
+        p_is_correct: isCorrect,
+        p_points: points,
       }
-      return NextResponse.json({ error: insertError.message }, { status: 500 })
-    }
+    )
 
-    //  Mettre à jour le score du joueur 
-    if (points > 0) {
-      const { data: playerData, error: playerFetchError } = await supabase
-        .from('players')
-        .select('score')
-        .eq('id', playerId)
-        .single()
-
-      if (!playerFetchError && playerData) {
-        await supabase
-          .from('players')
-          .update({ score: playerData.score + points })
-          .eq('id', playerId)
+    if (rpcError) {
+      if (rpcError.code === '23505') {
+        return NextResponse.json(
+          { error: 'Already answered' },
+          { status: 400 }
+        )
       }
+
+      console.error('[RPC ERROR]', rpcError)
+      return NextResponse.json(
+        { error: rpcError.message },
+        { status: 500 }
+      )
     }
 
     return NextResponse.json({ success: true, isCorrect, points })

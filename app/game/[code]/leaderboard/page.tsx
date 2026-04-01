@@ -101,14 +101,21 @@ useEffect(() => {
   }
 }, [code, router])
 
-  async function handleContinue() {
+   async function handleContinue() {
     setContinuing(true)
-    await fetch('/api/games/continue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gameCode: code }),
-    })
-    // Redirection via Realtime
+    try {
+      const response = await fetch('/api/games/continue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameCode: code }),
+      })
+      if (!response.ok) {
+        throw new Error('Failed to continue game')
+      }
+      // Redirection via Realtime
+    } catch {
+      setContinuing(false)
+    }
   }
 
   async function handleReplay() {
