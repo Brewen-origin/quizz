@@ -4,8 +4,6 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/app/components/lib/supabase'
 
-
-
 interface Question {
   id: string
   type: string
@@ -35,42 +33,58 @@ export default function ResultPage() {
 
   useEffect(() => {
     const playerId = localStorage.getItem('playerId')
-    if (!playerId) { router.push('/'); return }
+    if (!playerId) {
+      router.push('/')
+      return
+    }
 
     async function init() {
-      // Charger la partie
-      const { data: game } = await supabase
+      // Get game
+      const { data: game, error: gameError } = await supabase
         .from('games')
-        .select('id, question_ids, current_question_index')
+        .select('id')
         .eq('code', code)
         .single()
 
-      if (!game) { router.push('/'); return }
+      if (gameError || !game) {
+        router.push('/')
+        return
+      }
 
-      const questionId = game.question_ids[game.current_question_index - 1]
-      // -1 car next-question a déjà incrémenté l'index
-      // Si on vient directement de la révélation sans incrément, utilise current_question_index
+      const { data: lastAnswer, error: answerError } = await supabase
+        .from('answers')
+        .select('question_id, answer_value, is_correct, points')
+        .eq('game_id', game.id)
+        .eq('player_id', playerId)
+        .order('answered_at', { ascending: false })
+        .limit(1)
+        .single()
 
-      // Charger la question
-      const { data: q } = await supabase
+      if (answerError || !lastAnswer) {
+        console.error('No answer found')
+        return
+      }
+
+      // Fetch question
+      const { data: q, error: questionError } = await supabase
         .from('questions')
         .select('*')
-        .eq('id', questionId ?? game.question_ids[game.current_question_index])
+        .eq('id', lastAnswer.question_id)
         .single()
 
-      if (q) setQuestion(q)
+      if (questionError || !q) {
+        console.error('Question not found')
+        return
+      }
 
-      // Charger la réponse du joueur
-      const { data: answer } = await supabase
-        .from('answers')
-        .select('answer_value, is_correct, points')
-        .eq('player_id', playerId)
-        .eq('question_id', q?.id ?? questionId)
-        .single()
+      setQuestion(q)
+      setPlayerAnswer({
+        answer_value: lastAnswer.answer_value,
+        is_correct: lastAnswer.is_correct,
+        points: lastAnswer.points,
+      })
 
-      if (answer) setPlayerAnswer(answer)
-
-      // Vérifier si host
+      // Check if host
       const { data: me } = await supabase
         .from('players')
         .select('is_host')
@@ -78,12 +92,13 @@ export default function ResultPage() {
         .single()
 
       setIsHost(me?.is_host ?? false)
+
       setLoading(false)
     }
 
     init()
 
-    // Realtime — suivre les changements de statut
+    // Realtime
     const channel = supabase
       .channel(`result:${code}`)
       .on('postgres_changes', {
@@ -99,7 +114,9 @@ export default function ResultPage() {
       })
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [code, router])
 
   async function handleNext() {
@@ -109,10 +126,8 @@ export default function ResultPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ gameCode: code }),
     })
-    // La redirection se fait via Realtime
   }
 
-  // Formater la bonne réponse selon le type
   function formatCorrectAnswer(q: Question): string {
     if (q.type === 'qcm' || q.type === 'true_false' || q.type === 'image') {
       const index = parseInt(q.answer)
@@ -121,7 +136,6 @@ export default function ResultPage() {
     return q.answer
   }
 
-  // Formater la réponse du joueur
   function formatPlayerAnswer(q: Question, value: string): string {
     if (q.type === 'qcm' || q.type === 'true_false' || q.type === 'image') {
       const index = parseInt(value)
@@ -183,7 +197,7 @@ export default function ResultPage() {
           <p className="font-bold text-green-300">{formatCorrectAnswer(question)}</p>
         </div>
 
-        {/* Réponse du joueur si mauvaise */}
+        {/* Mauvaise réponse */}
         {playerAnswer && !correct && (
           <div className="bg-red-900/40 border border-red-700 rounded-xl px-4 py-3 mt-2">
             <p className="text-xs text-red-400 mb-1">Ta réponse</p>
@@ -194,7 +208,7 @@ export default function ResultPage() {
         )}
       </div>
 
-      {/* Bouton host */}
+      {/* Bouton */}
       {isHost ? (
         <button
           onClick={handleNext}
