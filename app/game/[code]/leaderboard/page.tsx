@@ -13,11 +13,8 @@ interface Player {
 
 const MEDALS = ['🥇', '🥈', '🥉']
 
-export default function LeaderboardPage() {
-  const params = useParams()
-  const code = params.code as string
+function useLeaderboard(code: string) {
   const router = useRouter()
-
   const [players, setPlayers] = useState<Player[]>([])
   const [isHost, setIsHost] = useState(false)
   const [isFinished, setIsFinished] = useState(false)
@@ -25,83 +22,89 @@ export default function LeaderboardPage() {
   const [loading, setLoading] = useState(true)
   const [continuing, setContinuing] = useState(false)
 
-useEffect(() => {
-  async function init() {
+  useEffect(() => {
     const playerId = localStorage.getItem('playerId')
-
     if (!playerId) {
       router.push('/')
       return
     }
-
     setMyPlayerId(playerId)
+    let isMounted = true
 
-    const { data: game } = await supabase
-      .from('games')
-      .select('id, status')
-      .eq('code', code)
-      .single()
+    async function fetchLeaderboard() {
+      try {
+        // Fetch game
+        const { data: game } = await supabase
+          .from('games')
+          .select('id, status')
+          .eq('code', code)
+          .single()
 
-    if (!game) {
-      router.push('/')
-      return
-    }
+        if (!game) {
+          router.push('/')
+          return
+        }
 
-    setIsFinished(game.status === 'finished')
+        if (isMounted) setIsFinished(game.status === 'finished')
 
-    const { data: playersData } = await supabase
-      .from('players')
-      .select('id, pseudo, score, is_host')
-      .eq('game_id', game.id)
-      .order('score', { ascending: false })
+        // Fetch players
+        const { data: playersData } = await supabase
+          .from('players')
+          .select('id, pseudo, score, is_host')
+          .eq('game_id', game.id)
+          .order('score', { ascending: false })
 
-    if (playersData) {
-      setPlayers(playersData)
-
-      const me = playersData.find((p) => p.id === playerId)
-      setIsHost(me?.is_host ?? false)
-    }
-
-    setLoading(false)
-  }
-
-  init()
-
-  const channel = supabase
-    .channel(`leaderboard:${code}`)
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'games',
-      filter: `code=eq.${code}`,
-    }, (payload) => {
-      if (payload.new.status === 'playing') {
-        router.push(`/game/${code}`)
+        if (playersData && isMounted) {
+          setPlayers(playersData)
+          const me = playersData.find((p) => p.id === playerId)
+          setIsHost(me?.is_host ?? false)
+        }
+      } catch (err) {
+        console.error(err)
+        router.push('/')
+      } finally {
+        if (isMounted) setLoading(false)
       }
-    })
-    .on('postgres_changes', {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'players',
-    }, (payload) => {
-      setPlayers((prev) =>
-        prev
-          .map((p) =>
-            p.id === payload.new.id
-              ? { ...p, score: payload.new.score }
-              : p
-          )
-          .sort((a, b) => b.score - a.score)
-      )
-    })
-    .subscribe()
+    }
 
-  return () => {
-    supabase.removeChannel(channel)
-  }
-}, [code, router])
+    fetchLeaderboard()
 
-   async function handleContinue() {
+    // Realtime subscription
+    const channel = supabase
+      .channel(`leaderboard:${code}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'games',
+        filter: `code=eq.${code}`,
+      }, (payload) => {
+        if (payload.new.status === 'playing') router.push(`/game/${code}`)
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'players',
+      }, (payload) => {
+        if (!isMounted) return
+        setPlayers((prev) =>
+          prev
+            .map((p) =>
+              p.id === payload.new.id
+                ? { ...p, score: payload.new.score }
+                : p
+            )
+            .sort((a, b) => b.score - a.score)
+        )
+      })
+      .subscribe()
+
+    return () => {
+      isMounted = false
+      supabase.removeChannel(channel)
+    }
+  }, [code, router])
+
+  const handleContinue = async () => {
     setContinuing(true)
     try {
       const response = await fetch('/api/games/continue', {
@@ -109,19 +112,23 @@ useEffect(() => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ gameCode: code }),
       })
-      if (!response.ok) {
-        throw new Error('Failed to continue game')
-      }
-      // Redirection via Realtime
+      if (!response.ok) throw new Error('Failed to continue game')
+      // Redirection handled via Realtime
     } catch {
       setContinuing(false)
     }
   }
 
-  async function handleReplay() {
-    // Retour home pour recréer une partie
-    router.push('/home')
-  }
+  return { players, isHost, isFinished, myPlayerId, loading, continuing, handleContinue }
+}
+
+export default function LeaderboardPage() {
+  const params = useParams()
+  const code = params.code as string
+  const router = useRouter()
+  const { players, isHost, isFinished, myPlayerId, loading, continuing, handleContinue } = useLeaderboard(code)
+
+  const handleReplay = () => router.push('/home')
 
   if (loading) {
     return (
@@ -139,43 +146,32 @@ useEffect(() => {
         <h1 className="text-2xl font-bold">
           {isFinished ? '🏆 Résultats finaux' : '📊 Classement'}
         </h1>
-        {!isFinished && (
-          <p className="text-gray-400 text-sm mt-1">En attente de la prochaine question...</p>
-        )}
+        {!isFinished && <p className="text-gray-400 text-sm mt-1">En attente de la prochaine question...</p>}
       </div>
 
-      {/* Podium top 3 — uniquement en fin de partie */}
+      {/* Podium top 3 */}
       {isFinished && players.length >= 1 && (
         <div className="flex items-end justify-center gap-2 mb-8 h-32">
-          {/* 2ème */}
           {players[1] && (
             <div className="flex flex-col items-center flex-1">
               <span className="text-2xl mb-1">🥈</span>
-              <p className="text-xs text-center text-gray-300 truncate w-full text-center">
-                {players[1].pseudo}
-              </p>
+              <p className="text-xs text-gray-300 truncate w-full text-center">{players[1].pseudo}</p>
               <div className="bg-gray-600 w-full rounded-t-xl flex items-end justify-center h-16 pt-2">
                 <span className="text-sm font-bold">{players[1].score}</span>
               </div>
             </div>
           )}
-          {/* 1er */}
           <div className="flex flex-col items-center flex-1">
             <span className="text-3xl mb-1">🥇</span>
-            <p className="text-xs text-center text-yellow-300 font-bold truncate w-full text-center">
-              {players[0].pseudo}
-            </p>
+            <p className="text-xs text-yellow-300 font-bold truncate w-full text-center">{players[0].pseudo}</p>
             <div className="bg-yellow-600 w-full rounded-t-xl flex items-end justify-center h-24 pt-2">
               <span className="text-sm font-bold">{players[0].score}</span>
             </div>
           </div>
-          {/* 3ème */}
           {players[2] && (
             <div className="flex flex-col items-center flex-1">
               <span className="text-2xl mb-1">🥉</span>
-              <p className="text-xs text-center text-gray-300 truncate w-full text-center">
-                {players[2].pseudo}
-              </p>
+              <p className="text-xs text-gray-300 truncate w-full text-center">{players[2].pseudo}</p>
               <div className="bg-orange-800 w-full rounded-t-xl flex items-end justify-center h-10 pt-2">
                 <span className="text-sm font-bold">{players[2].score}</span>
               </div>
@@ -189,25 +185,11 @@ useEffect(() => {
         {players.map((player, index) => {
           const isMe = player.id === myPlayerId
           return (
-            <div
-              key={player.id}
-              className={`flex items-center gap-3 px-4 py-3 border-b border-gray-800 last:border-0 ${
-                isMe ? 'bg-indigo-900/40' : ''
-              }`}
-            >
-              {/* Rang */}
-              <span className="text-lg w-8 text-center">
-                {index < 3 ? MEDALS[index] : `${index + 1}.`}
-              </span>
-
-              {/* Pseudo */}
+            <div key={player.id} className={`flex items-center gap-3 px-4 py-3 border-b border-gray-800 last:border-0 ${isMe ? 'bg-indigo-900/40' : ''}`}>
+              <span className="text-lg w-8 text-center">{index < 3 ? MEDALS[index] : `${index + 1}.`}</span>
               <span className={`flex-1 font-medium ${isMe ? 'text-indigo-300' : 'text-white'}`}>
-                {player.pseudo}
-                {isMe && <span className="text-xs text-indigo-400 ml-2">(toi)</span>}
-                {player.is_host && <span className="text-xs text-yellow-500 ml-2">👑</span>}
+                {player.pseudo}{isMe && <span className="text-xs text-indigo-400 ml-2">(toi)</span>}{player.is_host && <span className="text-xs text-yellow-500 ml-2">👑</span>}
               </span>
-
-              {/* Score */}
               <span className="font-bold text-yellow-400">{player.score} pts</span>
             </div>
           )
@@ -218,33 +200,21 @@ useEffect(() => {
       {isFinished ? (
         <div className="flex flex-col gap-3">
           {isHost && (
-            <button
-              onClick={handleReplay}
-              className="bg-indigo-600 hover:bg-indigo-500 rounded-2xl py-4 font-bold text-lg active:scale-95 transition-all"
-            >
+            <button onClick={handleReplay} className="bg-indigo-600 hover:bg-indigo-500 rounded-2xl py-4 font-bold text-lg active:scale-95 transition-all">
               🔄 Rejouer
             </button>
           )}
-          <button
-            onClick={() => router.push('/home')}
-            className="bg-gray-800 hover:bg-gray-700 rounded-2xl py-4 font-bold text-lg active:scale-95 transition-all"
-          >
+          <button onClick={() => router.push('/home')} className="bg-gray-800 hover:bg-gray-700 rounded-2xl py-4 font-bold text-lg active:scale-95 transition-all">
             🏠 Retour accueil
           </button>
         </div>
       ) : (
         isHost ? (
-          <button
-            onClick={handleContinue}
-            disabled={continuing}
-            className="bg-green-600 hover:bg-green-500 rounded-2xl py-5 font-bold text-xl active:scale-95 transition-all disabled:opacity-50"
-          >
+          <button onClick={handleContinue} disabled={continuing} className="bg-green-600 hover:bg-green-500 rounded-2xl py-5 font-bold text-xl active:scale-95 transition-all disabled:opacity-50">
             {continuing ? 'Chargement...' : 'Continuer →'}
           </button>
         ) : (
-          <div className="text-center text-gray-400 text-sm">
-            En attente du host...
-          </div>
+          <div className="text-center text-gray-400 text-sm">En attente du host...</div>
         )
       )}
     </main>
