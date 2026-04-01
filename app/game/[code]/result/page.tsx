@@ -47,15 +47,13 @@ export default function ResultPage() {
 
       if (!game) { router.push('/'); return }
 
-      const questionId = game.question_ids[game.current_question_index - 1]
-      // -1 car next-question a déjà incrémenté l'index
-      // Si on vient directement de la révélation sans incrément, utilise current_question_index
+      const questionId = game.question_ids[game.current_question_index]
 
       // Charger la question
       const { data: q } = await supabase
         .from('questions')
         .select('*')
-        .eq('id', questionId ?? game.question_ids[game.current_question_index])
+        .eq('id', questionId)
         .single()
 
       if (q) setQuestion(q)
