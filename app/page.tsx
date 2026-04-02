@@ -1,50 +1,71 @@
-'use client'
+"use client";
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, Suspense } from "react";
+import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
+//  Composant séparé pour useSearchParams
+function SessionLostBanner() {
+  const searchParams = useSearchParams();
+  const sessionLost = searchParams.get("error") === "session_perdue";
+
+  if (!sessionLost) return null;
+
+  return (
+    <div className="bg-orange-900/50 text-orange-300 rounded-xl px-4 py-3 mb-4 text-center text-sm">
+      Session expirée — reconnecte-toi
+    </div>
+  );
+}
+
+//  Page principale
 export default function HomePage() {
-  const router = useRouter()
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-
-const [pseudo, setPseudo] = useState(() => {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('pseudo') || ''
-  }
-  return ''
-})
+  const router = useRouter();
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [pseudo, setPseudo] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("pseudo") || "";
+    }
+    return "";
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
+    e.preventDefault();
+    setError("");
 
-    if (password !== 'piriac') {
-      setError('Mot de passe incorrect')
-      return
+    if (password !== "piriac") {
+      setError("Mot de passe incorrect");
+      return;
     }
     if (!pseudo.trim()) {
-      setError('Veuillez saisir un pseudo')
-      return
+      setError("Veuillez saisir un pseudo");
+      return;
     }
 
-    // Nettoyer la session précédente
-    localStorage.removeItem('playerId')
-    localStorage.removeItem('gameCode')
-    localStorage.setItem('pseudo', pseudo.trim())
-
-    router.push('/home')
-  }
+    localStorage.removeItem("playerId");
+    localStorage.removeItem("gameCode");
+    localStorage.setItem("pseudo", pseudo.trim());
+    router.push("/home");
+  };
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-950 text-white p-4">
       <h1 className="text-2xl font-bold mb-6">Bienvenue au Quiz !</h1>
+
+      {/* Suspense obligatoire autour de useSearchParams */}
+      <Suspense fallback={null}>
+        <SessionLostBanner />
+      </Suspense>
+
       <form
         onSubmit={handleSubmit}
         className="flex flex-col w-full max-w-sm gap-4 bg-gray-900 p-6 rounded-2xl"
       >
         <div>
-          <label className="block text-sm font-medium mb-1 text-gray-300">Mot de passe</label>
+          <label className="block text-sm font-medium mb-1 text-gray-300">
+            Mot de passe
+          </label>
           <input
             type="password"
             value={password}
@@ -54,7 +75,9 @@ const [pseudo, setPseudo] = useState(() => {
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1 text-gray-300">Pseudo</label>
+          <label className="block text-sm font-medium mb-1 text-gray-300">
+            Pseudo
+          </label>
           <input
             type="text"
             value={pseudo}
@@ -72,5 +95,5 @@ const [pseudo, setPseudo] = useState(() => {
         </button>
       </form>
     </div>
-  )
+  );
 }
