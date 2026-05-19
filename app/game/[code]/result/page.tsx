@@ -59,14 +59,23 @@ function useResultGame(code: string): GameData {
           router.push("/");
           return;
         }
+        if (game.status === "playing") {
+          router.push(`/game/${code}`);
+          return;
+        }
 
-        // 2. ✅ Question courante = celle pointée par l'index actuel
+        if (game.status === "leaderboard" || game.status === "finished") {
+          router.push(`/game/${code}/leaderboard`);
+          return;
+        }
+
+        // Question courante = celle pointée par l'index actuel
         const currentQuestionId =
           game.question_ids?.[game.current_question_index];
 
         if (!currentQuestionId) {
           console.error("[result] pas de question courante");
-          setLoading(false);
+          router.push("/");
           return;
         }
 
@@ -77,9 +86,15 @@ function useResultGame(code: string): GameData {
           .eq("id", currentQuestionId)
           .single();
 
-        if (q && isMounted) setQuestion(q);
+        if (!q) {
+          console.error("[result] question introuvable", currentQuestionId);
+          router.push("/");
+          return;
+        }
 
-        // 4. ✅ Fetch la réponse du joueur POUR CETTE question précisément
+        if (isMounted) setQuestion(q);
+
+        // 4. Fetch la réponse du joueur POUR CETTE question précisément
         const { data: answer } = await supabase
           .from("answers")
           .select("answer_value, is_correct, points")

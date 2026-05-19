@@ -14,6 +14,7 @@ export default function HomePage() {
   const { checking } = useReconnect();
 
   useEffect(() => {
+    if (checking) return;
     // Récupérer le pseudo stocké
     const storedPseudo = localStorage.getItem("pseudo");
     if (!storedPseudo) {
@@ -21,7 +22,7 @@ export default function HomePage() {
       return;
     }
     setPseudo(storedPseudo);
-  }, [router]);
+  }, [checking, router]);
 
   //  Créer une partie
   async function handleCreate() {
@@ -48,7 +49,8 @@ export default function HomePage() {
 
   //  Rejoindre une partie
   async function handleJoin() {
-    if (!joinCode.trim()) {
+    const normalizedCode = joinCode.trim().toUpperCase();
+    if (!normalizedCode) {
       setError("Entre un code de partie");
       return;
     }
@@ -58,14 +60,14 @@ export default function HomePage() {
       const res = await fetch("/api/games/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: joinCode.toUpperCase(), pseudo }),
+        body: JSON.stringify({ code: normalizedCode, pseudo }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
       localStorage.setItem("playerId", data.playerId);
       localStorage.setItem("gameCode", joinCode.toUpperCase());
-      router.push(`/lobby/${joinCode.toUpperCase()}`);
+      router.push(`/lobby/${normalizedCode}`);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erreur rejoindre partie");
     } finally {

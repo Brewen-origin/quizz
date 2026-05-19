@@ -21,11 +21,17 @@ export function useReconnect() {
 
       try {
         // Fetch la partie
-        const { data: game } = await supabase
+        const { data: game, error: gameError } = await supabase
           .from("games")
           .select("id, code, status")
           .eq("code", gameCode)
           .single();
+
+        if (gameError) {
+          console.error("[useReconnect][game_query]", gameError);
+          setChecking(false);
+          return;
+        }
 
         if (!game) {
           // Partie introuvable ou terminée → nettoie et reste sur /home
@@ -44,12 +50,18 @@ export function useReconnect() {
         }
 
         // Vérifie que le joueur existe toujours dans cette partie
-        const { data: player } = await supabase
+        const { data: player, error: playerError } = await supabase
           .from("players")
           .select("id")
           .eq("id", playerId)
           .eq("game_id", game.id)
           .maybeSingle();
+
+        if (playerError) {
+          console.error("[useReconnect][player_query]", playerError);
+          setChecking(false);
+          return;
+        }
 
         if (!player) {
           // Joueur supprimé ou partie différente → nettoie
