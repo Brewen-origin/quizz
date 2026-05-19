@@ -1,76 +1,86 @@
-'use client'
+"use client";
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useReconnect } from "@/app/components/hooks/useReconnect";
 
 export default function HomePage() {
-  const router = useRouter()
-  const [pseudo, setPseudo] = useState('')
-  const [joinCode, setJoinCode] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [view, setView] = useState<'home' | 'join'>('home')
+  const router = useRouter();
+  const [pseudo, setPseudo] = useState("");
+  const [joinCode, setJoinCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [view, setView] = useState<"home" | "join">("home");
+  const { checking } = useReconnect();
 
   useEffect(() => {
+    if (checking) return;
     // Récupérer le pseudo stocké
-    const storedPseudo = localStorage.getItem('pseudo')
+    const storedPseudo = localStorage.getItem("pseudo");
     if (!storedPseudo) {
-      router.push('/') // pas de pseudo : retour accueil
-      return
+      router.push("/"); // pas de pseudo : retour accueil
+      return;
     }
-    setPseudo(storedPseudo)
-  }, [router])
+    setPseudo(storedPseudo);
+  }, [checking, router]);
 
-  //  Créer une partie 
+  //  Créer une partie
   async function handleCreate() {
-    setLoading(true)
-    setError('')
+    setLoading(true);
+    setError("");
     try {
-      const res = await fetch('/api/games/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/games/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pseudo }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
 
-      localStorage.setItem('playerId', data.playerId)
-      localStorage.setItem('gameCode', data.gameCode)
-      router.push(`/lobby/${data.gameCode}`)
+      localStorage.setItem("playerId", data.playerId);
+      localStorage.setItem("gameCode", data.gameCode);
+      router.push(`/lobby/${data.gameCode}`);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur création partie')
+      setError(e instanceof Error ? e.message : "Erreur création partie");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
-  //  Rejoindre une partie 
+  //  Rejoindre une partie
   async function handleJoin() {
-    if (!joinCode.trim()) {
-      setError('Entre un code de partie')
-      return
+    const normalizedCode = joinCode.trim().toUpperCase();
+    if (!normalizedCode) {
+      setError("Entre un code de partie");
+      return;
     }
-    setLoading(true)
-    setError('')
+    setLoading(true);
+    setError("");
     try {
-      const res = await fetch('/api/games/join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: joinCode.toUpperCase(), pseudo }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      const res = await fetch("/api/games/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: normalizedCode, pseudo }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
 
-      localStorage.setItem('playerId', data.playerId)
-      localStorage.setItem('gameCode', joinCode.toUpperCase())
-      router.push(`/lobby/${joinCode.toUpperCase()}`)
+      localStorage.setItem("playerId", data.playerId);
+      localStorage.setItem("gameCode", joinCode.toUpperCase());
+      router.push(`/lobby/${normalizedCode}`);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Erreur rejoindre partie')
+      setError(e instanceof Error ? e.message : "Erreur rejoindre partie");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
-
+  if (checking) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-950 text-white">
+        <p className="text-gray-400">Reconnexion...</p>
+      </div>
+    );
+  }
   return (
     <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
       <h1 className="text-3xl font-bold mb-2">Bienvenue, {pseudo} 👋</h1>
@@ -82,17 +92,17 @@ export default function HomePage() {
         </div>
       )}
 
-      {view === 'home' && (
+      {view === "home" && (
         <div className="flex flex-col gap-4 w-full max-w-sm">
           <button
             onClick={handleCreate}
             disabled={loading}
             className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all rounded-2xl py-5 text-xl font-bold disabled:opacity-50"
           >
-            {loading ? 'Création...' : '🎮 Créer une partie'}
+            {loading ? "Création..." : "🎮 Créer une partie"}
           </button>
           <button
-            onClick={() => setView('join')}
+            onClick={() => setView("join")}
             className="bg-gray-800 hover:bg-gray-700 active:scale-95 transition-all rounded-2xl py-5 text-xl font-bold"
           >
             🔗 Rejoindre une partie
@@ -100,7 +110,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {view === 'join' && (
+      {view === "join" && (
         <div className="flex flex-col gap-4 w-full max-w-sm">
           <input
             type="text"
@@ -115,10 +125,13 @@ export default function HomePage() {
             disabled={loading}
             className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all rounded-2xl py-5 text-xl font-bold disabled:opacity-50"
           >
-            {loading ? 'Connexion...' : 'Rejoindre'}
+            {loading ? "Connexion..." : "Rejoindre"}
           </button>
           <button
-            onClick={() => { setView('home'); setError('') }}
+            onClick={() => {
+              setView("home");
+              setError("");
+            }}
             className="text-gray-400 py-3"
           >
             ← Retour
@@ -126,5 +139,5 @@ export default function HomePage() {
         </div>
       )}
     </main>
-  )
+  );
 }
