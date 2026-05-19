@@ -152,7 +152,9 @@ export function useGame(code: string): UseGameReturn {
           const questionId =
             gameData.question_ids[gameData.current_question_index];
           await fetchQuestion(questionId);
-          await checkHasAnswered(playerId, questionId);
+          if (playerId) {
+            await checkHasAnswered(playerId, questionId);
+          }
         }
 
         setLoading(false);
