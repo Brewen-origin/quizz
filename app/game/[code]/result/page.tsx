@@ -29,7 +29,7 @@ interface GameData {
   handleNext: () => void;
 }
 
-function useGame(code: string): GameData {
+function useResultGame(code: string): GameData {
   const router = useRouter();
   const [question, setQuestion] = useState<Question | null>(null);
   const [playerAnswer, setPlayerAnswer] = useState<PlayerAnswer | null>(null);
@@ -44,14 +44,14 @@ function useGame(code: string): GameData {
       return;
     }
 
-    let isMounted = true; // prevent state updates if component unmounted
+    let isMounted = true;
 
     async function fetchData() {
       try {
-        // Get game
+        // 1. Fetch game avec question_ids et current_question_index
         const { data: game } = await supabase
           .from("games")
-          .select("id")
+          .select("id, status, current_question_index, question_ids")
           .eq("code", code)
           .single();
 
@@ -60,56 +60,67 @@ function useGame(code: string): GameData {
           return;
         }
 
-        // Last answer
-        const { data: lastAnswer } = await supabase
-          .from("answers")
-          .select("question_id, answer_value, is_correct, points")
-          .eq("game_id", game.id)
-          .eq("player_id", playerId)
-          .order("answered_at", { ascending: false })
-          .limit(1)
+        // 2. ✅ Question courante = celle pointée par l'index actuel
+        const currentQuestionId =
+          game.question_ids?.[game.current_question_index];
+
+        if (!currentQuestionId) {
+          console.error("[result] pas de question courante");
+          setLoading(false);
+          return;
+        }
+
+        // 3. Fetch la question
+        const { data: q } = await supabase
+          .from("questions")
+          .select("*")
+          .eq("id", currentQuestionId)
           .single();
 
-        if (!lastAnswer) {
-          setPlayerAnswer(null);
-        } else {
-          setPlayerAnswer({
-            answer_value: lastAnswer.answer_value,
-            is_correct: lastAnswer.is_correct,
-            points: lastAnswer.points,
-          });
+        if (q && isMounted) setQuestion(q);
+
+        // 4. ✅ Fetch la réponse du joueur POUR CETTE question précisément
+        const { data: answer } = await supabase
+          .from("answers")
+          .select("answer_value, is_correct, points")
+          .eq("player_id", playerId)
+          .eq("question_id", currentQuestionId) // ← clé du fix
+          .maybeSingle();
+
+        if (isMounted) {
+          setPlayerAnswer(
+            answer
+              ? {
+                  answer_value: answer.answer_value,
+                  is_correct: answer.is_correct,
+                  points: answer.points,
+                }
+              : null,
+          );
         }
 
-        // Question
-        if (lastAnswer?.question_id) {
-          const { data: q } = await supabase
-            .from("questions")
-            .select("*")
-            .eq("id", lastAnswer.question_id)
-            .single();
-
-          if (q && isMounted) setQuestion(q);
-        }
-
-        // Host check
+        // 5. Host check
         const { data: me } = await supabase
           .from("players")
           .select("is_host")
           .eq("id", playerId)
           .single();
 
-        if (isMounted) setIsHost(me?.is_host ?? false);
+        if (isMounted) {
+          setIsHost(me?.is_host ?? false);
+          setLoading(false);
+        }
       } catch (err) {
-        console.error(err);
-        router.push("/");
-      } finally {
-        if (isMounted) setLoading(false);
+        console.error("[result]", err);
+        if (isMounted) {
+          router.push("/");
+        }
       }
     }
 
     fetchData();
 
-    // Realtime subscription
+    // Realtime — écoute les changements de status
     const channel = supabase
       .channel(`result:${code}`)
       .on(
@@ -122,9 +133,11 @@ function useGame(code: string): GameData {
         },
         (payload) => {
           const status = payload.new.status;
+          console.log("[result] game status →", status);
           if (status === "playing") router.push(`/game/${code}`);
-          if (status === "leaderboard" || status === "finished")
+          if (status === "leaderboard")
             router.push(`/game/${code}/leaderboard`);
+          if (status === "finished") router.push(`/game/${code}/leaderboard`);
         },
       )
       .subscribe();
@@ -144,8 +157,7 @@ function useGame(code: string): GameData {
         body: JSON.stringify({ gameCode: code }),
       });
       if (!res.ok) {
-        console.error("Failed to advance to next question");
-        // TODO notif erreur
+        console.error("[result] next-question failed:", await res.json());
       }
     } finally {
       setAdvancing(false);
@@ -159,7 +171,7 @@ export default function ResultPage() {
   const params = useParams();
   const code = params.code as string;
   const { question, playerAnswer, isHost, loading, advancing, handleNext } =
-    useGame(code);
+    useResultGame(code);
 
   if (loading || !question) {
     return (
@@ -191,6 +203,7 @@ export default function ResultPage() {
 
   return (
     <main className="min-h-screen bg-gray-950 text-white flex flex-col p-6 max-w-md mx-auto">
+      {/* Résultat */}
       <div
         className={`rounded-2xl p-6 text-center mb-6 ${
           noAnswer
@@ -217,6 +230,7 @@ export default function ResultPage() {
         )}
       </div>
 
+      {/* Question + réponses */}
       <div className="bg-gray-900 rounded-2xl p-4 mb-4">
         {question.image && (
           <img
@@ -244,6 +258,7 @@ export default function ResultPage() {
         )}
       </div>
 
+      {/* Action */}
       {isHost ? (
         <button
           onClick={handleNext}
@@ -253,7 +268,7 @@ export default function ResultPage() {
           {advancing ? "Chargement..." : "Question suivante →"}
         </button>
       ) : (
-        <div className="mt-auto text-center text-gray-400 text-sm">
+        <div className="mt-auto text-center text-gray-400 text-sm animate-pulse">
           En attente du host...
         </div>
       )}
