@@ -1,10 +1,9 @@
+// app/components/hooks/useGame.ts
 "use client";
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/app/components/lib/supabase";
-
-// Types
 
 export interface Game {
   id: string;
@@ -48,12 +47,10 @@ export interface UseGameReturn {
   players: Player[];
   currentQuestion: Question | null;
   myPlayer: Player | null;
-  hasAnswered: boolean; // joueur a déjà répondu à la question courante
+  hasAnswered: boolean;
   loading: boolean;
   error: string | null;
 }
-
-// Hook principal
 
 export function useGame(code: string): UseGameReturn {
   const router = useRouter();
@@ -66,12 +63,9 @@ export function useGame(code: string): UseGameReturn {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Ref pour éviter les requêtes question obsolètes
   const currentQuestionIdRef = useRef<string | null>(null);
-  // Ref pour éviter les double-subscriptions en StrictMode
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  //  Charger la question courante
   async function fetchQuestion(questionId: string) {
     if (!questionId) return;
     currentQuestionIdRef.current = questionId;
@@ -86,39 +80,31 @@ export function useGame(code: string): UseGameReturn {
       console.error("[useGame] fetchQuestion error:", error);
       return;
     }
-
-    // Ignorer si une question plus récente a été demandée
     if (currentQuestionIdRef.current !== questionId) return;
     if (data) setCurrentQuestion(data);
   }
 
-  //  Vérifier si le joueur a déjà répondu à la question courante
-  async function checkHasAnswered(playerId: string | null, questionId: string) {
+  async function checkHasAnswered(playerId: string, questionId: string) {
     if (!playerId || !questionId) return;
-
     const { data } = await supabase
       .from("answers")
       .select("id")
       .eq("player_id", playerId)
       .eq("question_id", questionId)
       .maybeSingle();
-
     setHasAnswered(!!data);
   }
-  const gameIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Lire playerId depuis localStorage
-    const playerId = localStorage.getItem("playerId");
 
+  useEffect(() => {
+    const playerId = localStorage.getItem("playerId");
     if (!playerId) {
       router.push("/?error=session_perdue");
       return;
     }
 
-    // Init : fetch état complet de la partie
     async function init() {
       try {
-        // Fetch game
+        // 1. Fetch game
         const { data: gameData, error: gameError } = await supabase
           .from("games")
           .select("*")
@@ -130,9 +116,8 @@ export function useGame(code: string): UseGameReturn {
           router.push("/home");
           return;
         }
-        gameIdRef.current = gameData.id;
 
-        // Fetch players
+        // 2. Fetch players
         const { data: playersData } = await supabase
           .from("players")
           .select("*")
@@ -142,49 +127,116 @@ export function useGame(code: string): UseGameReturn {
         const playersList = playersData ?? [];
         setPlayers(playersList);
 
-        // Identifier myPlayer
         const me = playersList.find((p) => p.id === playerId) ?? null;
         setMyPlayer(me);
 
-        // Joueur introuvable ou supprimé
         if (!me) {
           setError("Joueur introuvable");
           router.push("/home");
           return;
         }
 
-        // Reconnexion — marquer connected = true
-        const { error: reconnectError } = await supabase
+        // 3. Marquer connecté
+        await supabase
           .from("players")
           .update({ connected: true, last_seen: new Date().toISOString() })
           .eq("id", playerId);
 
-        if (reconnectError) {
-          console.error(
-            "[useGame] reconnection update failed:",
-            reconnectError,
-          );
-        }
-
         setGame(gameData);
 
-        // Charger la question courante si en jeu
-        const activeStatuses = ["playing", "revealing"];
+        // 4. Charger question courante si en jeu
         if (
-          activeStatuses.includes(gameData.status) &&
+          ["playing", "revealing"].includes(gameData.status) &&
           gameData.question_ids?.length > 0
         ) {
           const questionId =
             gameData.question_ids[gameData.current_question_index];
           await fetchQuestion(questionId);
-          await checkHasAnswered(playerId, questionId);
+          if (playerId) {
+            await checkHasAnswered(playerId, questionId);
+          }
         }
 
-        //  Redirection selon status au refresh
-        // (géré dans les pages qui consomment le hook)
-        // On expose game.status -> la page décide
-
         setLoading(false);
+
+        // ✅ 5. Subscription ICI — gameData.id est disponible
+        if (channelRef.current) {
+          supabase.removeChannel(channelRef.current);
+        }
+
+        const channel = supabase
+          .channel(`use-game:${gameData.id}`)
+
+          // games UPDATE — filtré par id (plus fiable que code)
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "games",
+              filter: `id=eq.${gameData.id}`,
+            },
+            async (payload) => {
+              console.log("[Realtime] game update →", payload.new.status);
+              const updated = payload.new as Game;
+              setGame(updated);
+
+              if (
+                updated.status === "playing" &&
+                updated.question_ids?.length > 0
+              ) {
+                const questionId =
+                  updated.question_ids[updated.current_question_index];
+                await fetchQuestion(questionId);
+                if (playerId) {
+                  await checkHasAnswered(playerId, questionId);
+                }
+              }
+            },
+          )
+
+          // players INSERT
+          .on(
+            "postgres_changes",
+            {
+              event: "INSERT",
+              schema: "public",
+              table: "players",
+              filter: `game_id=eq.${gameData.id}`, // ✅ gameData.id, pas gameIdRef
+            },
+            (payload) => {
+              const p = payload.new as Player;
+              setPlayers((prev) =>
+                prev.find((x) => x.id === p.id)
+                  ? prev
+                  : [...prev, p].sort((a, b) => b.score - a.score),
+              );
+            },
+          )
+
+          // players UPDATE
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "players",
+              filter: `game_id=eq.${gameData.id}`, // ✅ gameData.id, pas gameIdRef
+            },
+            (payload) => {
+              const p = payload.new as Player;
+              setPlayers((prev) =>
+                prev
+                  .map((x) => (x.id === p.id ? p : x))
+                  .sort((a, b) => b.score - a.score),
+              );
+              if (p.id === playerId) setMyPlayer(p);
+            },
+          )
+
+          .subscribe();
+
+        channelRef.current = channel;
       } catch (err) {
         console.error("[useGame] init error:", err);
         setError("Erreur de chargement");
@@ -194,96 +246,13 @@ export function useGame(code: string): UseGameReturn {
 
     init();
 
-    // Subscriptions Realtime
-
-    // Éviter double subscription (React StrictMode monte deux fois)
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-    }
-
-    const channel = supabase
-      .channel(`use-game:${code}`)
-
-      // Subscription game
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "games",
-          filter: `code=eq.${code}`,
-        },
-        async (payload) => {
-          const updated = payload.new as Game;
-          setGame(updated);
-
-          // Nouvelle question -> charger
-          if (
-            updated.status === "playing" &&
-            updated.question_ids?.length > 0
-          ) {
-            const questionId =
-              updated.question_ids[updated.current_question_index];
-            await fetchQuestion(questionId);
-            await checkHasAnswered(playerId, questionId);
-          }
-        },
-      )
-
-      // Subscription players - INSERT (nouveau joueur)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "players",
-          filter: "game_id=eq.${gameIdRef.current}",
-        },
-        (payload) => {
-          const newPlayer = payload.new as Player;
-          setPlayers((prev) => {
-            // Éviter les doublons
-            if (prev.find((p) => p.id === newPlayer.id)) return prev;
-            return [...prev, newPlayer].sort((a, b) => b.score - a.score);
-          });
-        },
-      )
-
-      // Subscription players -UPDATE (score, connected...)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "players",
-          filter: "game_id=eq.${gameIdRef.current}",
-        },
-        (payload) => {
-          const updated = payload.new as Player;
-          setPlayers((prev) =>
-            prev
-              .map((p) => (p.id === updated.id ? updated : p))
-              .sort((a, b) => b.score - a.score),
-          );
-          // Mettre à jour myPlayer si c'est nous
-          if (updated.id === playerId) {
-            setMyPlayer(updated);
-          }
-        },
-      )
-
-      .subscribe();
-
-    channelRef.current = channel;
-
-    // Cleanup propre au unmount
     return () => {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
       }
     };
-  }, [code]); //  pas router dans les deps, ça causerait des re-renders
+  }, [code]);
 
   return {
     game,

@@ -14,7 +14,7 @@ export default function GamePageWrapper() {
   const gameData = useGame(code);
 
   // key={currentQuestion?.id} force un reset complet du composant
-  // à chaque nouvelle question → localAnswered repasse à false automatiquement
+  // à chaque nouvelle question -> localAnswered repasse à false automatiquement
   return (
     <GamePage
       key={gameData.currentQuestion?.id ?? "loading"}
